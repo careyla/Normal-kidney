@@ -1,0 +1,1863 @@
+---
+title: "NK Study Analysis"
+author: "Laura Carey"
+date: "14/04/2022"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown Analysis of ARCS Normal Kidney Study
+
+```{r warning=FALSE, include=FALSE}
+#load packages ----
+library(dplyr)
+library(tidyverse)
+library(lubridate)
+library(blantyreSepsis)
+library(janitor)
+library(ggplot2)
+library(GGally)
+library(Rmisc)
+library(mice)
+library(splines)
+library(patchwork)
+library(kableExtra)
+library(splines)
+library(generics)
+library(arm)
+
+#rounding for dataframes
+round_df <- function(x, digits) {
+    # round all numeric variables
+    # x: data frame 
+    # digits: number of digits to round
+    numeric_columns <- sapply(x, mode) == 'numeric'
+    x[numeric_columns] <-  round(x[numeric_columns], digits)
+    x
+}
+```
+
+```{r}
+#read and clean the data
+ussdata<-read.csv("uss_data.csv")
+```
+
+
+```{r}
+data<-ussdata %>% dplyr::select(pid, Echogenicity.of.left.kidney, Echogenicity.of.right.kidney.in.kidney.liver.view, Size.of.right.kidney..cm., Size.of.left.kidney..cm., Corticomedullary.differentiation.of.right.kidney, Corticomedullary.differentiation.of.left.kidney, Hydronephrosis, Hydronephrosis.1, Quality.of.views)
+
+data<-data %>% dplyr::rename(echo_left=Echogenicity.of.left.kidney,
+                echo_right=Echogenicity.of.right.kidney.in.kidney.liver.view,
+                size_right=Size.of.right.kidney..cm.,
+                size_left=Size.of.left.kidney..cm.,
+                cmd_right=Corticomedullary.differentiation.of.right.kidney,
+                cmd_left=Corticomedullary.differentiation.of.left.kidney,
+                hydro_right=Hydronephrosis,
+                hydro_left=Hydronephrosis.1,
+                quality=Quality.of.views) %>%
+  mutate(pid = (sub("NK_","",data$pid)))
+
+data<-data %>% mutate(pid = (sub("NKS ","",data$pid)))
+
+baseline<-read.csv("baseline.csv")  %>%
+  dplyr::select(-start, -end, -deviceid, -Participant.ID, -HIV.status.,Why.were.you.unable.to.scan.the.Participant.ID, 
+         -Enter.the.Participant.ID., -Enter.participant.ID.again.1,-X__version__, -X_id, -X_uuid, -X_submission_time, -X_validation_status,
+         -X_notes,-X_status, -X_submitted_by,-X_tags,-X_index,-Which.department.,-Which.department..Gynae,-Which.department..Medical,-Which.department..Surgical,-Which.department..Renal, -Which.department..Ophthalmology, -Which.department..Trauma.Orthopaedics,-Which.department..Other,-Which.department..none.of.these,-enter.which.department,-Imaging.requested.XRAY,-Imaging.requested.Ultrasound,-Imaging.requested.ultrasound.urinary.tract..kidney.bladder.)
+```
+
+
+```{r}
+baseline<-baseline %>% dplyr::select(Enter.participant.ID.again, Sex, Age.group.of.participant, Enter.date.of.birth, Inpatient.or.outpatient.,
+                    Imaging.requested,Which.Xray., Which.ultrasound.,IIf.patient.is.attending.for.trauma.imaging.please.give.details.of.injury.accident, 
+                    Please.enter.other.trauma.accident.not.listed, In.the.past.week.have.you.had.any.of.the.following.,
+                    Do.you.have.diabetes.,Which.medication, Do.you.have.kidney.problems., Do.you.have.high.blood.pressure., Does.anyone.in.your.family.have.a.history.of.kidney.problems., Have.you.noticed.blood.in.the.urine.in.the.past.month.,Do.you.smoke.,How.many.do.you.did.you.smoke.per.week.,How.many.years.have.you.smoked.for.,Do.you.take.alcohol.,How.many.alcoholic.drinks.do.you.have.per.week.,Do.you.take.any.of.the.following.medications,Do.you.or.have.you.ever.taken.NSAIDS..e.g..brufen..on.a.daily.basis.,For.how.many.days.did.you.take.NSAIDs..e.g..brufen..every.day.,How.many.NSAIDs..e.g..brufen..do.you.take.per.day.,Have.you.taken.any.treatment.from.the.traditional.healer,Do.you.live.in.a.rural.or.urban.location.,Have.you.ever.lived.near.Lake.Malawi.,What.do.you.do.for.work.,Have.you.ever.had.an.HIV.test.,What.was.the.result.of.your.last.HIV.test., Are.you.taking.HIV.treatment.,If.you.are.on.ART.which.regimen.,Do.you.have.a.known.diagnosis.of.TB.,Have.you.been.hospitalised.for.severe.malaria.in.the.past.6.months., Please.record.the.height.in.cm,Please.record.the.weight.in.kg,Please.record.the.MUAC.in.cm,Please.record.the.systolic.BP,Please.record.the.diastolic.BP)
+```
+
+
+```{r}
+baseline<-baseline %>% dplyr::rename(pid=Enter.participant.ID.again,
+                    age_group=Age.group.of.participant,
+                    dob=Enter.date.of.birth,
+                    episode=Inpatient.or.outpatient.,
+                    imaging=Imaging.requested,
+                    xray=Which.Xray.,
+                    uss=Which.ultrasound.,
+                    trauma=IIf.patient.is.attending.for.trauma.imaging.please.give.details.of.injury.accident,
+                    other_px=Please.enter.other.trauma.accident.not.listed,
+                    symptoms=In.the.past.week.have.you.had.any.of.the.following.,
+                    diabetes=Do.you.have.diabetes.,
+                    hypertension=Do.you.have.high.blood.pressure.,
+                    diabetesmeds=Which.medication,
+                    kidney=Do.you.have.kidney.problems.,
+                    fhx_kidney=Does.anyone.in.your.family.have.a.history.of.kidney.problems.,
+                    haematuria=Have.you.noticed.blood.in.the.urine.in.the.past.month.,
+                    smoking=Do.you.smoke.,
+                    cigs_perweek=How.many.do.you.did.you.smoke.per.week.,
+                    smoking_yrs=How.many.years.have.you.smoked.for.,
+                    alcohol=Do.you.take.alcohol.,
+                    drinks_perweek=How.many.alcoholic.drinks.do.you.have.per.week.,
+                    meds=Do.you.take.any.of.the.following.medications,
+                    brufen_daily=Do.you.or.have.you.ever.taken.NSAIDS..e.g..brufen..on.a.daily.basis.,
+                    days_dailybrufen=For.how.many.days.did.you.take.NSAIDs..e.g..brufen..every.day.,
+                    n_brufen=How.many.NSAIDs..e.g..brufen..do.you.take.per.day.,
+                    traditional=Have.you.taken.any.treatment.from.the.traditional.healer,
+                    urban_rural=Do.you.live.in.a.rural.or.urban.location.,
+                    lake=Have.you.ever.lived.near.Lake.Malawi.,
+                    occupation=What.do.you.do.for.work.,
+                    HIV_test=Have.you.ever.had.an.HIV.test.,
+                    HIV_status=What.was.the.result.of.your.last.HIV.test.,
+                    HIV_tx=Are.you.taking.HIV.treatment.,
+                    ART=If.you.are.on.ART.which.regimen.,
+                    TB=Do.you.have.a.known.diagnosis.of.TB.,
+                    malaria=Have.you.been.hospitalised.for.severe.malaria.in.the.past.6.months.,
+                    height=Please.record.the.height.in.cm,
+                    weight=Please.record.the.weight.in.kg,
+                    muac=Please.record.the.MUAC.in.cm,
+                    sbp=Please.record.the.systolic.BP,
+                    dbp=Please.record.the.diastolic.BP)
+
+fulldata<-baseline<-baseline %>% mutate(pid=as.character(pid)) %>%
+left_join(data, by="pid")
+
+hypertension<-fulldata %>% filter(hypertension=="Yes")
+
+```
+
+
+```{r}
+write_csv(fulldata,"fulldata.csv")
+
+tidydata<-read.csv("tidyclean2.csv")
+
+```
+
+```{r}
+#wrangle the data 
+
+tidydata<-tidydata %>% mutate(dob=ymd(dob)) %>%
+  mutate(today=ymd(20220414),
+         age=interval(dob,today) / years(1),
+         c_height=height/100,
+         bmi=weight/(c_height)^2,
+        kidneysize=(size_right+size_left)/2)
+
+
+tidydata<-tidydata %>% replace_na(list(Sex="Unknown",
+                             age_group="Unknown",
+                             diabetes="Unknown",
+                             hypertension="Unknown",
+                             kidney="Unknown",
+                             TB ="Unknown",
+                             occupation="Unknown",
+                             urban_rural="Unknown",
+                             lake="Don't know",
+                             smoking="Dont know",
+                             alcohol="Unknown",
+                             meds="None",
+                             drinks_perweek="Unknown",
+                             cigs_perweek="Unknown",
+                             trauma ="Different reason",
+                             symptoms="No complaints",
+                             uss="no uss",
+                             xray="no xray"))
+                             
+levels(tidydata$trauma) = c("Assault", "Bike injury", "Burn", "Collapsed structure", "Different reason", "Fall", "Road traffic accident", "Unknown")      
+
+levels(tidydata$symptoms) = c("Abdominal or lower back pain", "Abdominal swelling","Chest pain","Confusion", "Cough","Fever","Headache","Multiple",       "Nausea","No complaints","Sweating or chills","Symptom not on this list", "Unknown") 
+
+levels(tidydata$uss)=c("Abdominal",        "Back",             "Breast",              "Echo",         "Head",     "Limb",             "Liver",            "Neck",             "No",               "Obstetric",        "Pelvic",           "Pelvic Abdominal",      
+"Scrotal",          "Scrotum",          "Shoulder",         "Transvaginal")
+
+levels(tidydata$xray)=c("Abdomen",         "Ankle",           "Arm",             "Chest",           "Elbow",           "Foot",            "Hand",            "Hip", "Knee",            "Leg",             "No",              "none of these",   "Pelvis",          "Radius",          "Ribs", 
+"Sacral lumbar", "Shoulder",        "Spine")
+
+levels(tidydata$xray)[levels(tidydata$xray)=="none of these"] <- "Other"
+levels(tidydata$imaging)[levels(tidydata$imaging)=="None of these"] <- "Other"
+levels(tidydata$trauma)[levels(tidydata$trauma)=="Different reason"] <- "Other"
+levels(tidydata$symptoms)[levels(tidydata$symptoms)=="Symptom not on this list"] <- "Other"
+
+tidydata<-tidydata %>% mutate(
+  xray=case_when(
+    xray=="Ankle"|xray=="Arm"|xray=="Foot"|xray=="Hand"|xray=="Hip"|xray=="Knee"|
+    xray=="Leg"|xray=="Pelvis"|xray=="Shoulder"|xray=="Ribs"|xray=="Spine"|
+      xray=="Sacral lumbar\n" ~ "MSK", T ~ xray))
+
+tidydata<-tidydata %>% mutate(
+  uss=case_when(
+    uss=="Back" | uss=="Shoulder" | uss=="Limb" | uss=="Head" ~ "MSK", T ~ uss
+  )
+)
+```
+
+
+```{r}
+tidydata<-tidydata %>% mutate(
+HIV_tx= case_when(
+  HIV_status=="Negative" | HIV_status=="Unknown" | HIV_status=="Not done" ~ "NA", T ~ HIV_tx),
+ART= case_when(
+  HIV_tx=="No" ~ "No ART", T ~ ART),
+xray= case_when(
+  imaging=="None of these" | imaging=="Ultrasound " ~ "No", T ~ xray),
+uss= case_when(
+  imaging=="None of these" | imaging =="XRAY " ~ "No", T ~ uss),
+  ART= case_when(
+  HIV_tx=="NA" ~ "NA", T ~ ART
+))
+```
+
+
+```{r}
+tidydata<-tidydata %>% mutate(
+  hydronephrophis = case_when(
+    hydro_right=="Increased" | hydro_left=="Increased" | hydro_right=="Mild" | hydro_left =="Mild" |
+    hydro_right=="Severe" | hydro_left =="Severe" | hydro_right=="Suspected pyonephrosis (debris in collecting system)" | hydro_left=="Suspected pyonephrosis (debris in collecting system)" ~ "yes", T ~ "none"),
+  cmd = case_when(
+      cmd_right=="Loss of corticomedullary differentiation" |cmd_left =="Loss of corticomedullary differentiation" ~ "no", T ~ "yes"),
+  echogenicity = case_when(
+        echo_left=="Increased" | echo_right== "Increased" ~ "increased", T ~ "normal"
+    ))
+```
+
+
+```{r}
+#tidydata<-tidydata %>%
+ # mutate(across(c(HIV_status,ART), na_if, "NA") %>%
+  #       mutate(ART=case_when(HIV_status=="Positive" & is.na(ART) ~ "Unknown")))
+
+tidydata<-tidydata %>% filter(!Sex=="Unknown", 
+                    !age_group=="Unknown",
+                    !quality=="Inadequate. Cannot make a quality assessment",
+                    !drinks_perweek==51,
+                    !cigs_perweek==30)
+
+```
+
+Get the KBR and BSA corrected kidney lengths
+KBR is length (mm) / height (cm) for each kidney
+
+```{r}
+tidydata<-tidydata %>% mutate(mm_right=size_right*10,
+                    mm_left=size_left*10,
+                    KBR_right=mm_right/height,
+                    KBR_left=mm_left/height)
+```
+
+```{r}
+summary<-summarySE(data=tidydata,measurevar = "KBR_right", groupvars = c("Sex","age_group"), na.rm=TRUE,
+                   conf.interval = 0.95)
+
+summary %>%
+  filter(Sex=="Female") %>%
+ggplot(aes(x=age_group,y=KBR_right))+
+  geom_line(aes(x=age_group,y=KBR_right, group=Sex)) +
+  geom_point()+
+  geom_errorbar(aes(ymin=KBR_right-ci,ymax=KBR_right+ci))
+```
+```{r}
+summary<-summarySE(data=tidydata,measurevar = "KBR_right", groupvars = c("Sex","age_group"), na.rm=TRUE,
+                   conf.interval = 0.95)
+
+summary %>%
+  filter(Sex=="Male") %>%
+ggplot(aes(x=age_group,y=KBR_right))+
+  geom_line(aes(x=age_group,y=KBR_right, group=Sex)) +
+  geom_point()+
+  geom_errorbar(aes(ymin=KBR_right-ci,ymax=KBR_right+ci))
+```
+
+Size and height correlations
+
+```{r}
+J<-ggplot(tidydata,aes(height, kidneysize))
+J+geom_jitter() + geom_smooth(model=lm)
+
+library("ggpubr")
+
+ggscatter(tidydata, x="height", y="kidneysize",
+          add="reg.line", conf.int = TRUE,
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab ="Height in cm", ylab ="Kidney size in cm")
+
+```
+
+```{r}
+ggscatter(tidydata, x="height", y="size_left",
+          add="reg.line", conf.int = TRUE,
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab ="Height in cm", ylab ="Left kidney size in cm")
+```
+```{r}
+ggscatter(tidydata, x="height", y="KBR_left",
+          add="reg.line", conf.int = TRUE,
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab ="Height in cm", ylab ="Left KBR")
+```
+
+Weight
+
+```{r}
+ggscatter(tidydata, x="weight", y="kidneysize",
+          add="reg.line", conf.int = TRUE,
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab ="Weight in kg", ylab ="Kidney size in cm")
+```
+
+
+```{r}
+J<-ggplot(tidydata,aes(age, kidneysize))
+J+geom_jitter()
+```
+
+```{r}
+J<-ggplot(tidydata,aes(age, KBR_right))
+J+geom_jitter()
+```
+
+
+How many in each age category?
+
+Age groups are quite evenly split
+
+```{r}
+d<-ggplot(tidydata, aes(age_group))
+d+ geom_bar()
+```
+
+HIV
+
+```{r}
+d<-ggplot(tidydata, aes(HIV_status))
+d+ geom_bar()
+```
+
+What about HIV status and age?
+
+```{r}
+tidydata %>%
+  filter(!HIV_status=="Unknown") %>%
+  filter(!HIV_status=="Not done") %>%
+  ggplot(aes(age_group, HIV_status)) +
+  geom_count()
+```
+
+Table 1 demographics
+
+```{r eval=FALSE, include=FALSE}
+# get the factors
+
+tidydata$age_group<-factor(tidydata$age_group,
+                    levels=c("18-29","30-39","40-49","50-59","60-69","70","NA"),
+                    labels = c("18-29","30-39","40-49","50-59","60-69","70+","unknown"))
+
+tidydata[sapply(tidydata, is.character)] <- lapply(tidydata[sapply(tidydata, is.character)], 
+                                                           as.factor)
+
+tidydata %>% mutate(xray=case_when(xray=="Arm" ~ "Arm",
+                                   xray=="Leg" ~ "Leg",
+                                   xray=="Shoulder" ~ "Shoulder",
+                                   xray=="Ankle" ~ "Ankle",
+                                   xray=="Knee" ~ "Knee",
+                                   xray=="Foot" ~ "Foot",
+                                   xray=="Chest" ~ "Chest",
+                                   xray=="Hand" ~ "Hand",
+                                   xray=="Hip" ~ "Hip",
+                                   xray=="Pelvis" ~ "Pelvis",
+                                   xray=="Rib" |
+                                   xray=="Ribs" |
+                                    xray=="Abdomen"|
+                                     xray=="Ankel" |
+                                     xray=="Elbow"|
+                                     xray=="none of these" ~ "other"
+                                   ))
+```
+
+
+```{r}
+tidydata %>%
+  dplyr::select(age, Sex, HIV_status, TB, hypertension, diabetes, smoking, meds, alcohol, bmi, sbp, dbp) %>%
+  do(pretty_tbl_df(., confint = FALSE)) %>%
+  filter(!levels %in% c("No",
+                        "no",
+                        "0",
+                        "Female",
+                        "No ART",
+                        #"Don't know",
+                        #"Unknown",
+                        "Used to",
+                        #"Dont know",
+                        "Positive",
+                        "Not done",
+                        "Yes but completed treatment",
+                        "Yes but never treated",
+                        "Not that I know of",
+                        #"Other",
+                        "Ex smoker",
+                        "No, never",
+                        "Used to",
+                        "None",
+                        "Yes on treatment"
+                          )) %>%
+ mutate(levels = case_when(
+    variable == "age" ~ "Age (years), median (IQR)",
+    variable == "Sex" ~ "Male sex",
+    variable == "HIV_status" ~ "HIV negative",
+    variable == "hypertension" ~ "Hypertension",
+    variable == "diabetes" ~ "Diabetes",
+    variable =="TB" ~ "No TB history",
+    variable =="smoking" ~ "Current smoker",
+    variable =="alcohol" ~ "Current drinker",
+    variable =="bmi" ~ "BMI, median (IQR)",
+    variable =="sbp" ~ "Systolic blood pressure (mmHg)",
+    variable =="dbp" ~ "Diastolic blood pressure (mmHg)"))-> T1
+
+
+#T1 %>%
+ # dplyr::select(-variable) %>%
+  #kbl(col.names = c("Variable", "Value"),
+  # caption = "TABLE 1: Baseline characteristics of included participants") %>%
+#  kable_classic(full_width = FALSE) %>%
+ # pack_rows(index = make_kable_rowgroup_string(T1, variable))
+
+
+tidydata %>% dplyr::select(age, Sex, HIV_status, ART, TB, hypertension, diabetes, smoking, meds, alcohol, occupation, urban_rural, lake) %>%
+  do(pretty_tbl_df(., confint = FALSE)) %>%
+  filter(!levels %in% c("No",
+                        "no",
+                        "0",
+                        "normal",
+                        "none"))  -> T1
+
+#T1 %>% kbl() %>%
+ # kable_classic(full_width = FALSE)
+```
+
+Table 2 clinical + ultrasound data
+
+```{r}
+tidydata %>% dplyr::select(bmi, sbp, dbp, kidneysize, size_right, size_left, cmd, echogenicity, hydronephrophis) %>%
+  do(pretty_tbl_df(., confint = FALSE)) %>%
+  filter(!levels %in% c("No",
+                        "no",
+                        "0",
+                        "normal",
+                        "none"))  -> T2
+
+T2 %>% kbl() %>%
+  kable_classic(full_width = FALSE)
+
+```
+
+Why attending radiology
+
+```{r}
+tidydata %>% dplyr::select(trauma, symptoms, xray, imaging, uss) %>%
+  do(pretty_tbl_df(., confint = FALSE)) %>%
+  filter(!levels %in% c("No",
+                        "no",
+                        "0"))  -> T3
+
+T3 %>% kbl() %>%
+  kable_classic(full_width = FALSE)
+
+```
+
+
+Using linear regression for predictive modelling
+
+```{r}
+sizedata<-tidydata %>% dplyr::select(age, kidneysize)
+ggpairs(data=sizedata, title="size data")
+```
+```{r}
+fit_1<-lm(kidneysize ~age, data=sizedata)
+summary(fit_1)
+```
+Check residuals - symmetrical around 0 suggesting model fits the data well
+```{r}
+
+hist(fit_1$residuals)
+```
+Linear model fitted to data
+
+```{r}
+ggplot(data = sizedata, aes(x = age, y = kidneysize)) +
+geom_point() +
+stat_smooth(method = "lm", col = "dodgerblue3") +
+theme(panel.background = element_rect(fill = "white"),
+axis.line.x=element_line(),
+axis.line.y=element_line()) +
+ggtitle("Linear Model Fitted to Data")
+```
+
+How well does our model make predictions?
+
+Kidney size for a 25 year old?
+```{r}
+predict(fit_1, data.frame(age=25))
+```
+
+plotting kidney size for each sex - Using the data we have
+everyone first
+```{r}
+all<-summarySE(data=tidydata,measurevar = "size_left",
+          na.rm=TRUE,conf.interval = 0.95)
+
+all %>% mutate(sdup=size_left+(2*sd),
+                  sddown=size_left-(2*sd))
+```
+```{r}
+all<-summarySE(data=tidydata,measurevar = "KBR_left",
+          na.rm=TRUE,conf.interval = 0.95)
+
+all %>% mutate(sdup=KBR_left+(2*sd),
+                  sddown=KBR_left-(2*sd))
+```
+
+```{r}
+all<-summarySE(data=tidydata,measurevar = "size_right",
+          na.rm=TRUE,conf.interval = 0.95)
+
+all %>% mutate(sdup=size_right+(2*sd),
+                  sddown=size_right-(2*sd))
+```
+```{r}
+all<-summarySE(data=tidydata,measurevar = "KBR_right",
+          na.rm=TRUE,conf.interval = 0.95)
+
+all %>% mutate(sdup=KBR_right+(2*sd),
+                  sddown=KBR_right-(2*sd))
+```
+
+
+```{r}
+
+both<-summarySE(data=tidydata,measurevar = "kidneysize", groupvars = c("Sex"),
+          na.rm=TRUE,conf.interval = 0.95)
+
+sum0<-summarySE(data=tidydata,measurevar = "size_left", groupvars = c("Sex"),
+          na.rm=TRUE,conf.interval = 0.95)
+
+sum0.1<-summarySE(data=tidydata,measurevar = "size_right", groupvars = c("Sex"),
+          na.rm=TRUE,conf.interval = 0.95)
+
+sum1<-summarySE(data=tidydata,measurevar = "size_left", groupvars = c("HIV_status"),
+          na.rm=TRUE,conf.interval = 0.95)
+
+sum2<-summarySE(data=tidydata,measurevar = "size_right", groupvars = c("HIV_status"),
+          na.rm=TRUE,conf.interval = 0.95)
+
+summary<-summarySE(data=tidydata,measurevar = "size_left", groupvars = c("Sex","age_group"), na.rm=TRUE,
+                   conf.interval = 0.95)
+
+summary %>%
+  filter(Sex=="Female") %>%
+ggplot(aes(x=age_group,y=size_left))+
+  geom_line(aes(x=age_group,y=size_left, group=Sex)) +
+  geom_point()+
+  geom_errorbar(aes(ymin=size_left-ci,ymax=size_left+ci))
+
+
+```
+
+```{r}
+tidydata %>% filter(Sex=="Female") %>%
+  summarySE(measurevar = "kidneysize",
+          na.rm=TRUE,conf.interval = 0.95) %>%
+  mutate(sdup=kidneysize+(2*sd),
+                  sddown=kidneysize-(2*sd))
+```
+```{r}
+tidydata %>% filter(Sex=="Male") %>%
+  summarySE(measurevar = "kidneysize",
+          na.rm=TRUE,conf.interval = 0.95) %>%
+  mutate(sdup=kidneysize+(2*sd),
+                  sddown=kidneysize-(2*sd))
+```
+
+
+
+Females
+```{r}
+tidydata %>% filter(Sex=="Female") %>%
+  summarySE(measurevar = "kidneysize", groupvars = c("age_group"),
+          na.rm=TRUE,conf.interval = 0.95) %>%
+  mutate(sdup=kidneysize+(2*sd),
+                  sddown=kidneysize-(2*sd))
+```
+
+
+Males
+
+```{r}
+tidydata %>% filter(Sex=="Male") %>%
+  summarySE(measurevar = "kidneysize", groupvars = c("age_group"),
+          na.rm=TRUE,conf.interval = 0.95) %>%
+  mutate(sdup=kidneysize+(2*sd),
+                  sddown=kidneysize-(2*sd))
+```
+
+
+```{r}
+agetab<-summarySE(data=tidydata,measurevar = "size_left", groupvars = c("age_group"),
+          na.rm=TRUE,conf.interval = 0.95)
+
+agetab 
+```
+```{r}
+agetab<-summarySE(data=tidydata,measurevar = "KBR_left", groupvars = c("age_group"),
+          na.rm=TRUE,conf.interval = 0.95)
+
+agetab %>% mutate(sdup=KBR_left+(2*sd),
+                  sddown=KBR_left-(2*sd))
+```
+
+```{r}
+agetab<-summarySE(data=tidydata,measurevar = "size_right", groupvars = c("age_group"),
+          na.rm=TRUE,conf.interval = 0.95)
+
+agetab %>% mutate(sdup=size_right+(2*sd),
+                  sddown=size_right-(2*sd))
+```
+
+```{r}
+agetab<-summarySE(data=tidydata,measurevar = "KBR_right", groupvars = c("age_group"),
+          na.rm=TRUE,conf.interval = 0.95)
+
+agetab %>% mutate(sdup=KBR_right+(2*sd),
+                  sddown=KBR_right-(2*sd))
+```
+
+
+Males
+
+```{r}
+summary %>%
+  filter(Sex=="Male" & !is.na(age_group)) %>%
+ggplot(aes(x=age_group,y=size_left))+
+  geom_line(aes(x=age_group,y=size_left,group=Sex)) +
+  geom_point()+
+  geom_errorbar(aes(ymin=size_left-ci,ymax=size_left+ci))
+```
+
+
+```{r}
+summary<-summarySE(data=tidydata,measurevar = "size_right", groupvars = c("Sex","age_group"), na.rm=TRUE,
+                   conf.interval = 0.95)
+
+summary %>%
+  filter(Sex=="Female") %>%
+ggplot(aes(x=age_group,y=size_right))+
+  geom_line(aes(x=age_group,y=size_right, group=Sex)) +
+  geom_point()+
+  geom_errorbar(aes(ymin=size_right-ci,ymax=size_right+ci))
+
+```
+
+```{r}
+summary %>%
+  filter(Sex=="Male") %>%
+ggplot(aes(x=age_group,y=size_right))+
+  geom_line(aes(x=age_group,y=size_right, group=Sex)) +
+  geom_point()+
+  geom_errorbar(aes(ymin=size_right-ci,ymax=size_right+ci))
+
+```
+
+Get left right, males females on same plot
+
+```{r}
+
+trimdat<-tidydata %>% dplyr::select(age_group, Sex, size_right, size_left, HIV_status) %>%
+  pivot_longer(cols=size_left:size_right,
+                          names_to="side", values_to="value") %>%
+  filter(!HIV_status=="Unknown") %>%
+  filter(!HIV_status=="Not done")
+
+
+trimdat<-trimdat %>% mutate(side=factor(side,
+                    levels=c("size_left","size_right"),
+                    labels=c("Left","Right")))
+
+
+summary<-summarySE(data=trimdat,measurevar = "value", groupvars = c("Sex","age_group","side"), na.rm=TRUE,
+                   conf.interval = 0.95)
+
+sizes<-summary %>%
+ggplot(aes(age_group, value)) +
+  geom_line(aes(x=age_group,y=value, group=Sex)) +
+  geom_point()+
+  geom_errorbar(aes(ymin=value-ci,ymax=value+ci)) + 
+  facet_wrap(~side + Sex) + labs (x= "Age group",
+                                  y= "Kidney size (cm)")
+
+```
+
+Filter out 'abnormals' to create a 'healthy' cohort
+
+remove diabetes and abnormal ultrasound
+
+```{r}
+
+remove<-tidydata %>% filter(diabetes=="Yes"| bmi>35 |hydronephrophis=="yes" | cmd=='no'| echogenicity=="increased"|
+                             HIV_status=="Unknown"| HIV_status=="Not done"|Sex=="Unknown") %>%
+  dplyr::select(diabetes, bmi, hydronephrophis, cmd, echogenicity, HIV_status, Sex)
+
+
+healthy<-tidydata %>% filter(!diabetes=="Yes", bmi<35, !hydronephrophis=="yes", !cmd=='no', !echogenicity=="increased",
+                             !HIV_status=="Unknown",!HIV_status=="Not done", !Sex=="Unknown")
+
+
+
+healthy<-healthy %>% filter(!pid=="11902",
+                    !pid=="12469",
+                    !pid=="12900",
+                    !pid=="12918",
+                    !pid=="13007",
+                    !pid=="13015",
+                    !pid=="13171",
+                    !pid=="13254",
+                    !pid=="10185")
+                   # !pid=="11076")
+
+
+healthy$HIV_status<-factor(healthy$HIV_status,
+                         levels=c("Negative","Positive"),
+                         labels=c("Negative","Positive"))
+```
+
+
+
+```{r}
+Sex <- c("Male", "Female") %>% as.factor()
+HIV_status <- c("Positive", "Negative") %>% as.factor()
+age <- seq(20,80,length=1000)
+new <- expand_grid(Sex, HIV_status, age)
+```
+
+
+```{r}
+library(ggpubr)
+
+f<-ggplot(healthy,(aes(HIV_status,kidneysize)))
+b<-f+geom_boxplot(outlier.shape=T)
+b+stat_compare_means(method="t.test") +xlab("HIV status") + ylab("Kidney size (cm)")                 
+
+f<-ggplot(healthy,(aes(Sex,kidneysize)))
+b<-f+geom_boxplot(outlier.shape=T)
+b+stat_compare_means(method="t.test") +xlab("Sex") + ylab("Kidney size (cm)")  
+
+
+f<-ggplot(healthy,(aes(age_group,kidneysize)))
+b<-f+geom_boxplot(outlier.shape=T)
+b+stat_compare_means(method="anova") +xlab("Age") + ylab("Kidney size (cm)")         
+
+
+
+```
+
+Remove the outliers
+
+```{r}
+f<-ggplot(healthy,(aes(age_group,size_left)))
+b<-f+geom_boxplot(outlier.shape=T)
+b+stat_compare_means(method="anova") +xlab("Age") + ylab("Kidney size (cm)")         
+```
+```{r}
+f<-ggplot(healthy,(aes(age_group,size_right)))
+b<-f+geom_boxplot(outlier.shape=T)
+b+stat_compare_means(method="anova") +xlab("Age") + ylab("Kidney size (cm)")       
+```
+Get the outliers
+Men
+
+```{r}
+Men<-healthy %>% filter(Sex=="Male")
+```
+
+
+```{r}
+boxplot(Men$size_left ~ Men$age_group)$out
+subset(Men, Men$size_left %in% boxplot(Men$size_left ~Men$age_group)$out)
+```
+
+
+```{r}
+boxplot(Men$size_right ~ Men$age_group)$out
+subset(Men, Men$size_right %in% boxplot(Men$size_right ~Men$age_group)$out)
+```
+Women
+
+```{r}
+Women<-healthy %>% filter(Sex=="Female")
+```
+
+
+```{r}
+boxplot(Women$size_left ~ Women$age_group)$out
+subset(Women, Women$size_left %in% boxplot(Women$size_left ~Women$age_group)$out)
+```
+
+
+```{r}
+boxplot(Women$size_right ~ Women$age_group)$out
+subset(Women, Women$size_right %in% boxplot(Women$size_right ~Women$age_group)$out)
+```
+
+Remove outliers
+```{r}
+#healthy<-healthy %>% filter(!pid=="11050",
+ #                   !pid=="10904",
+  #                  !pid=="12744",
+   #                 !pid=="10375",
+    #                !pid=="12504",
+     #               !pid=="11241",
+      #              !pid=="12041",
+       #             !pid=="12603",
+        #            !pid=="10581",
+           #         !pid=="13353"
+        #           )
+```
+
+Significant difference between left and right?
+```{r}
+t.test(healthy$size_left,healthy$size_right)
+```
+
+Combine HIV status first for combined prediction intervals
+```{r}
+mod<-lm(kidneysize ~ age + Sex, data=healthy)
+tidy(mod, exponentiate = TRUE, conf.int = TRUE) 
+
+
+y.hat<-fitted(mod)
+u<-resid(mod)
+sigma<-sigma.hat(mod)
+residual.plot(y.hat, u, sigma)
+```
+
+
+```{r}
+Sex <- c("Male", "Female") %>% as.factor()
+age <- seq(17,80,length=1000)
+datPred <- expand_grid(Sex, age)
+```
+
+Use datPred to get the prediction ranges and 95% confidence interval
+```{r}
+predsP=as.data.frame(predict(mod,newdata=datPred,interval="predict")) #prediction interval
+predsC=as.data.frame(predict(mod,newdata=datPred,interval="confidence")) # confidence interval
+
+datPred<-datPred %>%
+  mutate(
+    fit=predsP$fit,
+    fitPredLow=predsP$lwr,
+    fitPredUpp=predsP$upr,
+    fitConfLow=predsC$lwr,
+    fitConfUpp=predsC$upr,
+  )
+```
+
+
+Split into HIV positive and negative  
+
+```{r}
+HIV<-healthy %>% filter(HIV_status=="Positive")
+noHIV<-healthy %>% filter(HIV_status=="Negative")
+```
+
+HIV Positive
+```{r}
+mod<-lm(kidneysize ~ age + Sex, data=HIV)
+
+tidy(mod, exponentiate = TRUE, conf.int = TRUE) 
+
+y.hat<-fitted(mod)
+u<-resid(mod)
+sigma<-sigma.hat(mod)
+residual.plot(y.hat, u, sigma)
+```
+
+
+```{r}
+Sex <- c("Male", "Female") %>% as.factor()
+age <- seq(17,80,length=1000)
+datPred <- expand_grid(Sex, age)
+```
+
+Use datPred to get the prediction ranges and 95% confidence interval
+```{r}
+predsP=as.data.frame(predict(mod,newdata=datPred,interval="predict")) #prediction interval
+predsC=as.data.frame(predict(mod,newdata=datPred,interval="confidence")) # confidence interval
+
+datPred<-datPred %>%
+  mutate(
+    fit=predsP$fit,
+    fitPredLow=predsP$lwr,
+    fitPredUpp=predsP$upr,
+    fitConfLow=predsC$lwr,
+    fitConfUpp=predsC$upr,
+  )
+```
+
+
+HIV Positive
+```{r}
+sex<-ggplot(data=HIV,mapping=aes(x=age,y=kidneysize)) +
+  geom_point() +
+  facet_wrap(~Sex)+
+  geom_line(data=datPred,mapping=aes(x=age,y=fit),col="steelblue") +
+  geom_ribbon(data=datPred,mapping=aes(x=age,y=fit,ymin=fitPredLow,ymax=fitPredUpp),alpha=0.25,fill="steelblue") +
+  geom_ribbon(data=datPred,mapping=aes(x=age,y=fit,ymin=fitConfLow,ymax=fitConfUpp),alpha=0.25,fill="orange") +
+  theme_light() +
+  xlab("Age") +
+  ylab("Kidney size (cm)") +
+  labs(title="") + 
+  theme(axis.line = element_line(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+
+sex
+```
+
+HIV Negative
+```{r}
+mod<-lm(kidneysize ~ age + Sex, data=noHIV)
+
+tidy(mod, exponentiate = TRUE, conf.int = TRUE) 
+y.hat<-fitted(mod)
+u<-resid(mod)
+sigma<-sigma.hat(mod)
+residual.plot(y.hat, u, sigma)
+```
+
+
+```{r}
+Sex <- c("Male", "Female") %>% as.factor()
+age <- seq(17,80,length=1000)
+datPred <- expand_grid(Sex, age)
+```
+
+
+```{r}
+predsP=as.data.frame(predict(mod,newdata=datPred,interval="predict")) #prediction interval
+predsC=as.data.frame(predict(mod,newdata=datPred,interval="confidence")) # confidence interval
+
+datPred<-datPred %>%
+  mutate(
+    fit=predsP$fit,
+    fitPredLow=predsP$lwr,
+    fitPredUpp=predsP$upr,
+    fitConfLow=predsC$lwr,
+    fitConfUpp=predsC$upr,
+  )
+```
+
+
+HIV Negative
+```{r}
+sex<-ggplot(data=noHIV,mapping=aes(x=age,y=kidneysize)) +
+  geom_point() +
+  facet_wrap(~Sex)+
+  geom_line(data=datPred,mapping=aes(x=age,y=fit),col="steelblue") +
+  geom_ribbon(data=datPred,mapping=aes(x=age,y=fit,ymin=fitPredLow,ymax=fitPredUpp),alpha=0.25,fill="steelblue") +
+  geom_ribbon(data=datPred,mapping=aes(x=age,y=fit,ymin=fitConfLow,ymax=fitConfUpp),alpha=0.25,fill="orange") +
+  theme_light() +
+  xlab("Age") +
+  ylab("Kidney size (cm)") +
+  labs(title="") + 
+  theme(axis.line = element_line(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+
+sex
+```
+
+
+Get the non-bootstrapped prediction ranges and 95% confidence interval
+
+```{r}
+mod<- lm(kidneysize ~ age + Sex, data=healthy)
+  Sex <- c("Male") %>% as.factor()
+  age <- seq(18,29,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+min(pre[,2])
+max(pre[,3])
+pre<-predict(mod, newdat=datPred, interval ="confidence")  
+min(pre[,2])
+max(pre[,3])
+```
+```{r}
+mod<- lm(kidneysize ~ age + Sex, data=healthy)
+  Sex <- c("Female") %>% as.factor()
+  age <- seq(18,29,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+min(pre[,2])
+max(pre[,3])
+pre<-predict(mod, newdat=datPred, interval ="confidence")  
+min(pre[,2])
+max(pre[,3])
+```
+```{r}
+mod<- lm(kidneysize ~ age + Sex, data=healthy)
+  Sex <- c("Male") %>% as.factor()
+  age <- seq(30,39,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+min(pre[,2])
+max(pre[,3])
+pre<-predict(mod, newdat=datPred, interval ="confidence")  
+min(pre[,2])
+max(pre[,3])
+```
+```{r}
+mod<- lm(kidneysize ~ age + Sex, data=healthy)
+  Sex <- c("Female") %>% as.factor()
+  age <- seq(30,39,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+min(pre[,2])
+max(pre[,3])
+pre<-predict(mod, newdat=datPred, interval ="confidence")  
+min(pre[,2])
+max(pre[,3])
+```
+```{r}
+mod<- lm(kidneysize ~ age + Sex, data=healthy)
+  Sex <- c("Male") %>% as.factor()
+  age <- seq(40,49,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+min(pre[,2])
+max(pre[,3])
+pre<-predict(mod, newdat=datPred, interval ="confidence")  
+min(pre[,2])
+max(pre[,3])
+```
+```{r}
+mod<- lm(kidneysize ~ age + Sex, data=healthy)
+  Sex <- c("Female") %>% as.factor()
+  age <- seq(40,49,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+min(pre[,2])
+max(pre[,3])
+pre<-predict(mod, newdat=datPred, interval ="confidence")  
+min(pre[,2])
+max(pre[,3])
+```
+```{r}
+mod<- lm(kidneysize ~ age + Sex, data=healthy)
+  Sex <- c("Male") %>% as.factor()
+  age <- seq(50,59,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+min(pre[,2])
+max(pre[,3])
+pre<-predict(mod, newdat=datPred, interval ="confidence")  
+min(pre[,2])
+max(pre[,3])
+```
+```{r}
+mod<- lm(kidneysize ~ age + Sex, data=healthy)
+  Sex <- c("Female") %>% as.factor()
+  age <- seq(50,59,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+min(pre[,2])
+max(pre[,3])
+pre<-predict(mod, newdat=datPred, interval ="confidence")  
+min(pre[,2])
+max(pre[,3])
+```
+```{r}
+mod<- lm(kidneysize ~ age + Sex, data=healthy)
+  Sex <- c("Male") %>% as.factor()
+  age <- seq(60,69,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+min(pre[,2])
+max(pre[,3])
+pre<-predict(mod, newdat=datPred, interval ="confidence")  
+min(pre[,2])
+max(pre[,3])
+```
+```{r}
+mod<- lm(kidneysize ~ age + Sex, data=healthy)
+  Sex <- c("Female") %>% as.factor()
+  age <- seq(60,69,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+min(pre[,2])
+max(pre[,3])
+pre<-predict(mod, newdat=datPred, interval ="confidence")  
+min(pre[,2])
+max(pre[,3])
+```
+```{r}
+mod<- lm(kidneysize ~ age + Sex, data=healthy)
+  Sex <- c("Male") %>% as.factor()
+  age <- seq(70,80,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+min(pre[,2])
+max(pre[,3])
+pre<-predict(mod, newdat=datPred, interval ="confidence")  
+min(pre[,2])
+max(pre[,3])
+```
+```{r}
+mod<- lm(kidneysize ~ age + Sex, data=healthy)
+  Sex <- c("Female") %>% as.factor()
+  age <- seq(70,80,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+min(pre[,2])
+max(pre[,3])
+pre<-predict(mod, newdat=datPred, interval ="confidence")  
+min(pre[,2])
+max(pre[,3])
+```
+```{r}
+mod<- lm(kidneysize ~ age + Sex, data=healthy)
+  Sex <- c("Male") %>% as.factor()
+  age <- seq(18,80,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+min(pre[,2])
+max(pre[,3])
+pre<-predict(mod, newdat=datPred, interval ="confidence")  
+min(pre[,2])
+max(pre[,3])
+```
+```{r}
+mod<- lm(kidneysize ~ age + Sex, data=healthy)
+  Sex <- c("Female") %>% as.factor()
+  age <- seq(18,80,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+min(pre[,2])
+max(pre[,3])
+pre<-predict(mod, newdat=datPred, interval ="confidence")  
+min(pre[,2])
+max(pre[,3])
+```
+
+
+```{r}
+
+
+```
+
+Now bootstrap to get lower and upper limits for each age group and sex
+
+
+```{r}
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Male") %>% as.factor()
+  age <- seq(18,29,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  min <- min(pre[,2])
+  data <- c(data, min)
+}
+
+quantile(data, c(0.025, 0.975))
+
+```
+
+
+```{r}
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Male") %>% as.factor()
+  age <- seq(18,29,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  max <- max(pre[,3])
+  data <- c(data, max)
+}
+
+quantile(data, c(0.025, 0.975))
+```
+
+```{r}
+
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Male") %>% as.factor()
+  age <- seq(30,39,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  min <- min(pre[,2])
+  data <- c(data, min)
+}
+
+quantile(data, c(0.025, 0.975))
+
+
+```
+```{r}
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Male") %>% as.factor()
+  age <- seq(30,39,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  max <- max(pre[,3])
+  data <- c(data, max)
+}
+
+quantile(data, c(0.025, 0.975))
+
+```
+
+```{r}
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Male") %>% as.factor()
+  age <- seq(40,49,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  min <- min(pre[,2])
+  data <- c(data, min)
+}
+
+quantile(data, c(0.025, 0.975))
+
+```
+```{r}
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Male") %>% as.factor()
+  age <- seq(40,49,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  max <- max(pre[,3])
+  data <- c(data, max)
+}
+
+quantile(data, c(0.025, 0.975))
+
+```
+```{r}
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Male") %>% as.factor()
+  age <- seq(50,59,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  min <- min(pre[,2])
+  data <- c(data, min)
+}
+
+quantile(data, c(0.025, 0.975))
+```
+```{r}
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Male") %>% as.factor()
+  age <- seq(50,59,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  max <- max(pre[,3])
+  data <- c(data, max)
+}
+
+quantile(data, c(0.025, 0.975))
+
+```
+
+```{r}
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Male") %>% as.factor()
+  age <- seq(60,69,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  min <- min(pre[,2])
+  data <- c(data, min)
+}
+
+quantile(data, c(0.025, 0.975))
+```
+
+```{r}
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Male") %>% as.factor()
+  age <- seq(60,69,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  max <- max(pre[,3])
+  data <- c(data, max)
+}
+
+quantile(data, c(0.025, 0.975))
+
+```
+
+```{r}
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Male") %>% as.factor()
+  age <- seq(70,80,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  min <- min(pre[,2])
+  data <- c(data, min)
+}
+
+quantile(data, c(0.025, 0.975))
+```
+
+```{r}
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Male") %>% as.factor()
+  age <- seq(70,80,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  max <- max(pre[,3])
+  data <- c(data, max)
+}
+
+quantile(data, c(0.025, 0.975))
+```
+
+```{r}
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Male") %>% as.factor()
+  age <- seq(18,80,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  min <- min(pre[,2])
+  data <- c(data, min)
+}
+
+quantile(data, c(0.025, 0.975))
+```
+
+```{r}
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Male") %>% as.factor()
+  age <- seq(18,80,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  max <- max(pre[,3])
+  data <- c(data, max)
+}
+
+quantile(data, c(0.025, 0.975))
+```
+
+FEMALES
+
+```{r}
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Female") %>% as.factor()
+  age <- seq(18,29,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  min <- min(pre[,2])
+  data <- c(data, min)
+}
+
+quantile(data, c(0.025, 0.975))
+
+```
+
+
+```{r}
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Female") %>% as.factor()
+  age <- seq(18,29,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  max <- max(pre[,3])
+  data <- c(data, max)
+}
+
+quantile(data, c(0.025, 0.975))
+```
+
+```{r}
+
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Female") %>% as.factor()
+  age <- seq(30,39,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  min <- min(pre[,2])
+  data <- c(data, min)
+}
+
+quantile(data, c(0.025, 0.975))
+
+
+```
+
+```{r}
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Female") %>% as.factor()
+  age <- seq(30,39,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  max <- max(pre[,3])
+  data <- c(data, max)
+}
+
+quantile(data, c(0.025, 0.975))
+
+```
+
+```{r}
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Female") %>% as.factor()
+  age <- seq(40,49,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  min <- min(pre[,2])
+  data <- c(data, min)
+}
+
+quantile(data, c(0.025, 0.975))
+
+```
+
+```{r}
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Female") %>% as.factor()
+  age <- seq(40,49,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  max <- max(pre[,3])
+  data <- c(data, max)
+}
+
+quantile(data, c(0.025, 0.975))
+
+```
+
+```{r}
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Female") %>% as.factor()
+  age <- seq(50,59,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  min <- min(pre[,2])
+  data <- c(data, min)
+}
+
+quantile(data, c(0.025, 0.975))
+```
+
+```{r}
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Female") %>% as.factor()
+  age <- seq(50,59,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  max <- max(pre[,3])
+  data <- c(data, max)
+}
+
+quantile(data, c(0.025, 0.975))
+
+```
+
+```{r}
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Female") %>% as.factor()
+  age <- seq(60,69,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  min <- min(pre[,2])
+  data <- c(data, min)
+}
+
+quantile(data, c(0.025, 0.975))
+```
+
+```{r}
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Female") %>% as.factor()
+  age <- seq(60,69,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  max <- max(pre[,3])
+  data <- c(data, max)
+}
+
+quantile(data, c(0.025, 0.975))
+
+```
+
+```{r}
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Female") %>% as.factor()
+  age <- seq(70,80,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  min <- min(pre[,2])
+  data <- c(data, min)
+}
+
+quantile(data, c(0.025, 0.975))
+```
+
+```{r}
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Female") %>% as.factor()
+  age <- seq(70,80,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  max <- max(pre[,3])
+  data <- c(data, max)
+}
+
+quantile(data, c(0.025, 0.975))
+```
+
+```{r}
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Female") %>% as.factor()
+  age <- seq(18,80,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  min <- min(pre[,2])
+  data <- c(data, min)
+}
+
+quantile(data, c(0.025, 0.975))
+```
+
+```{r}
+set.seed(123)
+#number of boostrap replicates (1,000)
+B<-1e3
+#create empty storage container
+
+
+data <- c()
+for(b in 1:B){
+  #draw a boostrap sample 
+  boot<-healthy[sample(1:nrow(healthy),size=nrow(healthy),replace=TRUE),]
+  #fit model to bootstrapped data fit.b<-lm(kidneysize ~ age + Sex, data = data[boot,])
+  mod<- lm(kidneysize ~ age + Sex, data=boot)
+  Sex <- c("Female") %>% as.factor()
+  age <- seq(18,80,length=1000)
+  datPred <- expand_grid(Sex, age)
+  pre<-predict(mod, newdat=datPred, interval ="predict")  
+  max <- max(pre[,3])
+  data <- c(data, max)
+}
+
+quantile(data, c(0.025, 0.975))
+```
+```
+
+
+```{r}
+ggscatter(healthy, x="weight", y="kidneysize",
+          add="reg.line", conf.int = TRUE,
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab ="Weight in kg", ylab ="Kidney size in cm")
+```
+
